@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Particle Space - Diagonal Waves & Flipped Ship</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #030303;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="screen"></canvas>
+
+    <script>
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+
+        let particles = [];
+        let shipParticles = [];
+        
+        // --- НАСТРОЙКИ СЦЕНЫ ---
+        const gap = 30;             
+        const fov = 400;            
+        const cameraY = -320;       
+        const cameraZ = -230;       
+        
+        const mouse = { x: null, y: null, radius: 150 }; 
+
+        // --- КОЛОССАЛЬНАЯ 3D МОДЕЛЬ КОРАБЛЯ ---
+        const shipModel = [
+            // Корпус (Нижняя часть)
+            {x: 0, y: 50, z: 200},    
+            {x: -90, y: 36, z: 30},   
+            {x: 90, y: 36, z: 30},    
+            {x: -70, y: 36, z: -140},  
+            {x: 70, y: 36, z: -140},   
+            
+            // Корпус (Верхняя палуба)
+            {x: 0, y: -16, z: 230},    
+            {x: -100, y: -24, z: 30},  
+            {x: 100, y: -24, z: 30},   
+            {x: -80, y: -24, z: -150}, 
+            {x: 80, y: -24, z: -150},  
+
+            // Мачта
+            {x: 0, y: -50, z: 0},     
+            {x: 0, y: -260, z: 0},    
+
+            // Главный парус
+            {x: 0, y: -80, z: -10},    
+            {x: 90, y: -150, z: 50},   
+            {x: 0, y: -220, z: -10},   
+
+            // Передний парус
+            {x: 0, y: -60, z: 150},    
+            {x: -50, y: -150, z: 80},  
+        ];
+
+        // --- НАСТРОЙКИ ДИАГОНАЛЬНЫХ ВОЛН ---
+        const waveLength = 340;     
+        const waveHeight = 35;      
+        const waveSpeed = 1.6;      
+        
+        // Вектор направления движения волны (0.7 и 0.7 дают идеальный угол в 45 градусов)
+        const dirX = 0.707;
+        const dirZ = 0.707;
+
+        function calculateWave(x, z, time) {
+            let k = (2 * Math.PI) / waveLength;
+            let c = Math.sqrt(9.8 / k) * waveSpeed;
+            
+            // Проекция координат на диагональное направление
+            let distanceAlongDir = x * dirX + z * dirZ;
+            let phase = k * (distanceAlongDir - c * time);
+            
+            let steepness = 0.35;
+            let a = steepness / k;
+
+            // Смещение точек происходит по диагонали и вверх
+            let dX = wX = a * Math.cos(phase) * dirX;
+            let dZ = wZ = a * Math.cos(phase) * dirZ;
+            let y = waveHeight * Math.sin(phase); 
+
+            return { x: x + dX, y: y, z: z + dZ };
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            createOcean();
+        }
+
+        function project(x, y, z) {
+            let transX = x;
+            let transY = y - cameraY;
+            let transZ = z - cameraZ;
+
+            if (transZ <= 0) return null;
+
+            let scale = fov / transZ;
+            let screenX = (canvas.width / 2) + transX * scale;
+            let screenY = (canvas.height / 2) + transY * scale;
+
+            return { x: screenX, y: screenY, scale: scale };
+        }
+
+        class OceanParticle {
+            constructor(x, z) {
+                this.baseX = x;
+                this.baseZ = z;
+                
+                this.currentX = x;
+                this.currentY = 0;
+                this.currentZ = z;
+
+                this.screenX = 0;
+                this.screenY = 0;
+                this.offsetX = 0;
+                this.offsetY = 0;
+            }
+
+            update(time) {
+                let wavePos = calculateWave(this.baseX, this.baseZ, time);
+                this.currentX = wavePos.x;
+                this.currentY = wavePos.y;
+                this.currentZ = wavePos.z;
+
+                let proj = project(this.currentX, this.currentY, this.currentZ);
+                
+                if (proj) {
+                    this.screenX = proj.x + this.offsetX;
+                    this.screenY = proj.y + this.offsetY;
+
+                    let dx = mouse.x - this.screenX;
+                    let dy = mouse.y - this.screenY;
+                    let distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < mouse.radius) {
+                        let force = (mouse.radius - distance) / mouse.radius;
+                        this.offsetX -= (dx / distance) * force * 12;
+                        this.offsetY -= (dy / distance) * force * 12;
+                    } else {
+                        this.offsetX *= 0.90;
+                        this.offsetY *= 0.90;
+                    }
+                }
+            }
+
+            draw() {
+                let proj = project(this.currentX, this.currentY, this.currentZ);
+                if (!proj) return;
+
+                if (this.screenX < 0 || this.screenX > canvas.width || this.screenY < 0 || this.screenY > canvas.height) return;
+
+                let alpha = Math.min(1, 400 / this.currentZ);
+                
+                let foam = Math.max(0, (this.currentY + waveHeight) / (waveHeight * 2));
+                ctx.fillStyle = `rgba(255, 255, 255, ${(alpha * 0.4) + foam * 0.35})`;
+
+                ctx.beginPath();
+                ctx.arc(this.screenX, this.screenY, Math.max(0.5, 1.2 * proj.scale), 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function createOcean() {
+            particles = [];
+            for (let z = 60; z < 1100; z += gap) {
+                for (let x = -850; x < 850; x += gap) {
+                    particles.push(new OceanParticle(x, z));
+                }
+            }
+        }
+
+        function draw3DLine(p1, p2, density = 20) {
+            for (let i = 0; i <= density; i++) {
+                let t = i / density;
+                let x = p1.x + (p2.x - p1.x) * t;
+                let y = p1.y + (p2.y - p1.y) * t;
+                let z = p1.z + (p2.z - p1.z) * t;
+                shipParticles.push({x: x, y: y, z: z});
+            }
+        }
+
+        function build3DShip(shipY, shipRotX, shipRotZ, time) {
+            shipParticles = [];
+            
+            // РОТАЦИЯ НАОБОРОТ: Развернули модель на противоположный борт (-2.15 радиан)
+            let shipRotY = -2.15 + Math.sin(time * 0.2) * 0.02; 
+
+            let cosX = Math.cos(shipRotX), sinX = Math.sin(shipRotX);
+            let cosY = Math.cos(shipRotY), sinY = Math.sin(shipRotY);
+            let cosZ = Math.cos(shipRotZ), sinZ = Math.sin(shipRotZ);
+
+            let transformedModel = shipModel.map(p => {
+                let x1 = p.x * cosY - p.z * sinY;
+                let z1 = p.x * sinY + p.z * cosY;
+
+                let y2 = p.y * cosX - z1 * sinX;
+                let z2 = p.y * sinX + z1 * cosX;
+
+                let x3 = x1 * cosZ - y2 * sinZ;
+                let y3 = x1 * sinZ + y2 * cosZ;
+
+                return {
+                    x: x3,
+                    y: y3 + shipY,
+                    z: z2 + 450 
+                };
+            });
+
+            const m = transformedModel;
+
+            // Сборка каркаса
+            draw3DLine(m[0], m[1], 15); draw3DLine(m[0], m[2], 15);
+            draw3DLine(m[1], m[3], 20); draw3DLine(m[2], m[4], 20);
+            draw3DLine(m[3], m[4], 15);
+
+            draw3DLine(m[5], m[6], 15); draw3DLine(m[5], m[7], 15);
+            draw3DLine(m[6], m[8], 20); draw3DLine(m[7], m[9], 20);
+            draw3DLine(m[8], m[9], 15);
+
+            draw3DLine(m[0], m[5], 10); draw3DLine(m[1], m[6], 10);
+            draw3DLine(m[2], m[7], 10); draw3DLine(m[3], m[8], 10);
+            draw3DLine(m[4], m[9], 10);
+
+            draw3DLine(m[10], m[11], 35);
+
+            draw3DLine(m[11], m[13], 25); draw3DLine(m[13], m[12], 25); draw3DLine(m[12], m[10], 20);
+            draw3DLine(m[11], m[16], 20); draw3DLine(m[16], m[15], 20); draw3DLine(m[15], m[10], 20);
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const time = Date.now() * 0.0012;
+
+            // Считываем высоту косой волны под ключевыми точками корабля (с учетом его нового разворота)
+            let waveCenter = calculateWave(0, 450, time);
+            let waveFront = calculateWave(40, 450 - 90, time);  
+            let waveBack = calculateWave(-40, 450 + 90, time);  
+
+            let shipY = waveCenter.y - 30; 
+
+            // Наклон корпуса подстраивается под прохождение диагонального вала
+            let waveSlopeX = (waveFront.y - waveBack.y) * 0.006;
+            let shipRotX = waveSlopeX;    
+            
+            // Динамический боковой крен (Roll) от косого удара волны в борт
+            let shipRotZ = (waveCenter.y / waveHeight) * -0.05;    
+
+            build3DShip(shipY, shipRotX, shipRotZ, time);
+
+            // Рендер океана
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update(time);
+                particles[i].draw();
+            }
+
+            // Рендер корабля
+            for (let i = 0; i < shipParticles.length; i++) {
+                let p = shipParticles[i];
+                let proj = project(p.x, p.y, p.z);
+                
+                if (proj) {
+                    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+                    ctx.beginPath();
+                    ctx.arc(proj.x, proj.y, Math.max(1.0, 1.8 * proj.scale), 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = e.clientX;
+            mouse.y = e.clientY;
+        });
+
+        window.addEventListener('mouseleave', () => {
+            mouse.x = null;
+            mouse.y = null;
+        });
+
+        window.addEventListener('resize', resize);
+
+        resize();
+        animate();
+    </script>
+</body>
+</html>
